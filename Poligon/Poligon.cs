@@ -1,4 +1,7 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+
 [assembly: InternalsVisibleTo("PoligonTests")]
 
 namespace Poligon
@@ -21,29 +24,96 @@ namespace Poligon
 
         private void Mesh(Action<Point, Point, Point>? callback = null)
         {
+            bool isConvex = CheckConvex(_lst);
             while (_lst.Count > 2 || _stack.Count > 0)
             {
                 if (_lst.Count == 2)
+                {
                     _lst = _stack.Pop();
-
-                var v = GetIndexOfLeftBottomPoint();
-                var u = Next(v);
-                var w = Prev(v);
-
-                if (ExistVertexInside(v, u, w, out List<int> points))
-                {
-                    var vi = GetIndexOfNearestPoint(_lst[u], _lst[w], points);
-                    var (lst1, lst2) = Split(v, vi);
-                    _stack.Push(lst2);
-                    _lst = lst1;
+                    isConvex = CheckConvex(_lst);
                 }
-                else
+
+                if (isConvex) // в выпуклом разбиение делаем за О(n)
                 {
-                    mesh.Add((_lst[v], _lst[u], _lst[w]));
-                    callback?.Invoke(_lst[v], _lst[u], _lst[w]);
-                    _lst.RemoveAt(v);
+                    var v = GetIndexOfLeftBottomPoint();
+                    while (_lst.Count > 2)
+                    {
+                        var u = Next(v);
+                        var w = Prev(v);
+
+                        if (ExistVertexInside(v, u, w, out List<int> points))
+                        {
+                            var vi = GetIndexOfNearestPoint(_lst[u], _lst[w], points);
+                            var (lst1, lst2) = Split(v, vi);
+                            _stack.Push(lst2);
+                            _lst = lst1;
+                        }
+                        else
+                        {
+                            mesh.Add((_lst[v], _lst[u], _lst[w]));
+                            callback?.Invoke(_lst[v], _lst[u], _lst[w]);
+
+                            // в выпуклом многоугольнике выбираем правую нижнюю только из двух смежных с предыдущей правой нижней
+                            var nextV = GetIndexOfLeftBottomPoint(u, w);
+                            _lst.RemoveAt(v);
+
+                            // если правой нижней вершина стала следующая в списке, то уменьшаем ее индекс на 1 после удаления v
+                            if (v < nextV)
+                                nextV--;
+
+                            v= nextV;
+                        }
+                    }
+                }
+                else // в невыпуклом разбиение делаем за О(n^2)
+                {
+                    var v = GetIndexOfLeftBottomPoint(); // можно сделать за О(n)
+                    var u = Next(v);
+                    var w = Prev(v);
+
+                    if (ExistVertexInside(v, u, w, out List<int> points))
+                    {
+                        var vi = GetIndexOfNearestPoint(_lst[u], _lst[w], points);
+                        var (lst1, lst2) = Split(v, vi);
+                        _stack.Push(lst2);
+                        _lst = lst1;
+                    }
+                    else
+                    {
+                        mesh.Add((_lst[v], _lst[u], _lst[w]));
+                        callback?.Invoke(_lst[v], _lst[u], _lst[w]);
+                        _lst.RemoveAt(v);
+                        isConvex = CheckConvex(_lst);
+                    }
                 }
             }
+        }
+
+        private bool CheckConvex(List<Point> lst)
+        {
+            int sum = 0;
+            var size = lst.Count;
+            var p2 = lst[^2];
+            var p1 = lst[^1];
+
+            for (int i = 0; i < size; i++)
+            {
+                Point p0 = lst[i];
+                int s = GetSign(p2, p1, p0);
+                sum += s;
+                p2 = p1;
+                p1= p0;
+            }
+
+            return Math.Abs(sum) == size;
+        }
+
+        private int GetSign(Point p1, Point p2, Point p3)
+        {
+            var ab = new Point() { X = p2.X - p1.X, Y = p2.Y - p1.Y };
+            var bc = new Point() { X = p3.X - p2.X, Y = p3.Y - p2.Y };
+
+            return Math.Sign(ab.X * bc.Y - ab.Y * bc.X);
         }
 
         private int Next(int current) => (current + 1) % _lst.Count;
@@ -64,11 +134,11 @@ namespace Poligon
         private int GetIndexOfNearestPoint(Point point1, Point point2, List<int> points)
         {
             var abc = GetABC(point1, point2);
-            var max0 = Geth(abc.A, abc.B, abc.C, _lst[points[0]]);
+            var max0 = GethSquare(abc.A, abc.B, abc.C, _lst[points[0]]);
             var rsl = points[0];
             for (int i = 1;i < points.Count;i++)
             {
-                var maxi = Geth(abc.A, abc.B, abc.C, _lst[0]);
+                var maxi = GethSquare(abc.A, abc.B, abc.C, _lst[0]);
                 if (max0 < maxi)
                 {
                     max0 = maxi;
@@ -86,8 +156,15 @@ namespace Poligon
             return (A, B, C);
         }
 
-        private static float Geth(float A, float B, float C, Point p0) => (float)(Math.Abs(A * p0.X + B * p0.Y + C) / Math.Sqrt(A * A + B * B));
+        //GethSquare работает быстрее
+        private static float GethSquare(float A, float B, float C, Point p0)
+        {
+            var s = A * p0.X + B * p0.Y + C;
+            return s * s / (A * A + B * B);
+        }
 
+
+        // O(n)
         private bool ExistVertexInside(int v, int u, int w, out List<int> points)
         {
             var rsl = false;
@@ -107,28 +184,9 @@ namespace Poligon
             return rsl;
         }
 
-        internal bool IsPointInPoligon2(Point p, Point[] poligon)
-        {
-            float sum = 0f;
-            var size = poligon.Length;
-            for (int i = 0; i < size; i++)
-            {
-                Point p1 = poligon[i];
-                Point p2 = poligon[(i + 1) % size];
-                Point v1 = new Point() { X = p1.X - p.X, Y = p1.Y - p.Y };
-                Point v2 = new Point() { X = p2.X - p1.X, Y = p2.Y - p1.Y};
-                Point n2 = new Point() { X = v2.Y, Y = -v2.X }; // нормаль к v2 (стороне треугольника)
-
-                var sign = Math.Sign(dot(v1, n2));
-                sum += sign;
-            }
-
-            return Math.Abs(sum) > 2.99f;
-        }
-
         internal bool IsPointInPoligon(Point p, Point[] poligon)
         {
-            float sum = 0f;
+            int sum = 0;
             var size = poligon.Length;
             var p2 = poligon[^1];
 
@@ -139,13 +197,15 @@ namespace Poligon
                 Point v2 = new Point() { X = p2.X - p1.X, Y = p2.Y - p1.Y };
                 Point n2 = new Point() { X = v2.Y, Y = -v2.X }; // нормаль к v2 (стороне треугольника)
 
+                // если точка внутри треугольника =>
+                // скалярное произведение вектора от точки к вершине на нормаль к стороне одного знака для всех сторон
                 var sign = Math.Sign(dot(v1, n2));
                 sum += sign;
 
                 p2 = p1;
             }
 
-            return Math.Abs(sum) > 2.99f;
+            return Math.Abs(sum) == 3;
         }
 
         private float dot(Point v1, Point v2) => v1.X * v2.X + v1.Y * v2.Y;
@@ -153,8 +213,20 @@ namespace Poligon
 
         private int GetIndexOfLeftBottomPoint()
         {
+            // можно оптимизировать и сделать за O(n)
             return _lst.IndexOf(_lst.OrderBy(w => w.X).ThenBy(w => w.Y).First());
         }
-
+        private int GetIndexOfLeftBottomPoint(int u, int w)
+        {
+            if (_lst[u].X < _lst[w].X)
+                return u;
+            if (_lst[u].X > _lst[w].X)
+                return w;
+            if (_lst[u].Y < _lst[w].Y)
+                return u;
+            if (_lst[u].Y > _lst[w].Y)
+                return w;
+            return u;
+        }
     }
 }
